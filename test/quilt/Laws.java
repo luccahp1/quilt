@@ -207,6 +207,129 @@ final class Laws {
         lattice(label + " (gossiped states)", states.subList(0, Math.min(4, states.size())));
     }
 
+    /**
+     * Checks that {@code delta} is exactly "what the receiver is missing", over every pair drawn
+     * from {@code states}.
+     *
+     * <p>Four properties, each one a different way a delta can be wrong:
+     *
+     * <ul>
+     *   <li><b>complete</b> - merging the delta into the receiver lands where merging the whole
+     *       state would. A delta that drops something leaves the receiver behind for good.
+     *   <li><b>honest</b> - the delta holds nothing the sender does not. Merging it back into the
+     *       sender changes nothing.
+     *   <li><b>lean</b> - the delta holds nothing the receiver already has. Asking it again for
+     *       what that receiver is missing returns it unchanged.
+     *   <li><b>quiet</b> - a receiver that already has everything is sent the empty state.
+     * </ul>
+     */
+    static <S extends Crdt<S>> void delta(String label, List<S> states, S empty) {
+        for (S receiver : states) {
+            for (S sender : states) {
+                S d = sender.delta(receiver);
+                if (!receiver.merge(d).equals(receiver.merge(sender))) {
+                    throw new AssertionError(
+                            label
+                                    + ": delta is incomplete.\n  receiver + delta = "
+                                    + receiver.merge(d)
+                                    + "\n  receiver + state = "
+                                    + receiver.merge(sender));
+                }
+                if (!sender.merge(d).equals(sender)) {
+                    throw new AssertionError(
+                            label + ": delta holds something the sender does not. delta = " + d);
+                }
+                if (!d.delta(receiver).equals(d)) {
+                    throw new AssertionError(
+                            label
+                                    + ": delta resends what the receiver has.\n  delta = "
+                                    + d
+                                    + "\n  receiver = "
+                                    + receiver);
+                }
+                S upToDate = receiver.merge(sender);
+                if (!sender.delta(upToDate).equals(empty)) {
+                    throw new AssertionError(
+                            label
+                                    + ": an up-to-date receiver was sent something. delta = "
+                                    + sender.delta(upToDate));
+                }
+            }
+        }
+    }
+
+    /**
+     * {@link #gossip}, but every sync ships a delta instead of a whole state.
+     *
+     * <p>Each replica remembers, per peer, a state it can prove that peer holds: everything it has
+     * sent it so far. That record lags behind reality, because peers also learn from each other,
+     * so deltas here are often larger than strictly needed. That is the realistic case, and the
+     * point of the test: a delta computed against a stale but true lower bound must still converge.
+     * After the random phase every replica sends to every other once, deltas only, and they must
+     * all agree.
+     */
+    static <S extends Crdt<S>> void deltaGossip(
+            String label,
+            List<ReplicaId> ids,
+            S initial,
+            Operation<S> apply,
+            Random random,
+            int steps,
+            Function<S, Object> view) {
+
+        int n = ids.size();
+        List<S> states = new ArrayList<>();
+        List<List<S>> sentTo = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            states.add(initial);
+            List<S> row = new ArrayList<>();
+            for (int j = 0; j < n; j++) {
+                row.add(initial);
+            }
+            sentTo.add(row);
+        }
+
+        for (int step = 0; step < steps; step++) {
+            int actor = random.nextInt(n);
+            states.set(actor, apply.apply(states.get(actor), ids.get(actor), step));
+
+            int peer = random.nextInt(n);
+            if (peer != actor) {
+                sendDelta(states, sentTo, actor, peer);
+            }
+        }
+
+        S expected = foldLeft(states);
+        for (int from = 0; from < n; from++) {
+            for (int to = 0; to < n; to++) {
+                if (from != to) {
+                    sendDelta(states, sentTo, from, to);
+                }
+            }
+        }
+
+        for (int i = 0; i < n; i++) {
+            if (!states.get(i).equals(expected)) {
+                throw new AssertionError(
+                        label
+                                + ": replica "
+                                + ids.get(i)
+                                + " did not converge on deltas alone.\n  expected = "
+                                + view.apply(expected)
+                                + "\n  got      = "
+                                + view.apply(states.get(i)));
+            }
+        }
+    }
+
+    private static <S extends Crdt<S>> void sendDelta(
+            List<S> states, List<List<S>> sentTo, int from, int to) {
+        S known = sentTo.get(from).get(to);
+        S d = states.get(from).delta(known);
+        states.set(to, states.get(to).merge(d));
+        sentTo.get(from).set(to, known.merge(d));
+    }
+
     /** A local operation performed by one replica at one step of a gossip simulation. */
     interface Operation<S> {
         S apply(S state, ReplicaId replica, int step);

@@ -56,6 +56,13 @@ public final class PNCounter implements Crdt<PNCounter> {
     }
 
     @Override
+    public PNCounter delta(PNCounter since) {
+        Objects.requireNonNull(since, "since");
+        return new PNCounter(
+                increments.delta(since.increments), decrements.delta(since.decrements));
+    }
+
+    @Override
     public boolean equals(Object o) {
         return o instanceof PNCounter p
                 && increments.equals(p.increments)

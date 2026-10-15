@@ -37,4 +37,33 @@ public interface Crdt<S extends Crdt<S>> {
      * @return a state at least as advanced as both inputs
      */
     S merge(S other);
+
+    /**
+     * Returns only the part of this state that {@code since} is missing.
+     *
+     * <p>Shipping a whole state on every sync is correct but wasteful: a counter with a thousand
+     * replicas sends a thousand slots to report one increment. A delta is the alternative. It is
+     * an ordinary state of the same type, built from just the pieces of this one that are not
+     * already in {@code since}, so a peer known to hold {@code since} can catch up with it alone:
+     *
+     * <pre>{@code
+     * since.merge(this.delta(since)).equals(since.merge(this))   // always
+     * }</pre>
+     *
+     * <p>Because a delta is a state, everything that makes merge safe carries over. Deltas can be
+     * batched by merging them together, delivered out of order, or delivered twice. The one
+     * requirement is on the sender: {@code since} must be something the receiver really holds,
+     * such as the last state it acknowledged. When in doubt, sending the whole state is always
+     * correct, and {@code delta(empty())} is exactly that.
+     *
+     * <p>A delta never contains anything this state does not, and never contains anything
+     * {@code since} already has. It is a message to merge, not a value to read: a sequence delta,
+     * for instance, can hold an insert whose anchor the receiver already has and the delta does
+     * not.
+     *
+     * @param since a state the receiver is known to hold; must not be null
+     * @return the smallest state that brings {@code since} up to date with this one, which is the
+     *     empty state when there is nothing to send
+     */
+    S delta(S since);
 }

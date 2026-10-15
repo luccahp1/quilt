@@ -201,6 +201,27 @@ public final class Rga<E> implements Crdt<Rga<E>> {
     }
 
     /**
+     * The elements and tombstones {@code since} has not seen.
+     *
+     * <p>Typing one character into a long document produces a delta of one node. That node's
+     * anchor is usually not in the delta, because the receiver already has it, so a delta read on
+     * its own would drop the character: it is for merging, not for reading.
+     */
+    @Override
+    public Rga<E> delta(Rga<E> since) {
+        Objects.requireNonNull(since, "since");
+        Map<Dot, Node<E>> unseenNodes = new TreeMap<>();
+        for (Map.Entry<Dot, Node<E>> entry : nodes.entrySet()) {
+            if (!since.nodes.containsKey(entry.getKey())) {
+                unseenNodes.put(entry.getKey(), entry.getValue());
+            }
+        }
+        Set<Dot> unseenTombstones = new TreeSet<>(tombstones);
+        unseenTombstones.removeAll(since.tombstones);
+        return new Rga<>(unseenNodes, unseenTombstones);
+    }
+
+    /**
      * Preorder walk of the causal tree, including tombstoned nodes so they can still anchor their
      * children.
      *

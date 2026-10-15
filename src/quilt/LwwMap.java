@@ -106,6 +106,21 @@ public final class LwwMap<K, V> implements Crdt<LwwMap<K, V>> {
         return new LwwMap<>(next);
     }
 
+    /** The keys whose write here would beat the one {@code since} holds, and only those. */
+    @Override
+    public LwwMap<K, V> delta(LwwMap<K, V> since) {
+        Objects.requireNonNull(since, "since");
+        Map<K, LwwRegister<V>> newer = new LinkedHashMap<>();
+        for (Map.Entry<K, LwwRegister<V>> entry : entries.entrySet()) {
+            LwwRegister<V> theirs = since.entries.getOrDefault(entry.getKey(), LwwRegister.empty());
+            LwwRegister<V> change = entry.getValue().delta(theirs);
+            if (!change.isEmpty()) {
+                newer.put(entry.getKey(), change);
+            }
+        }
+        return new LwwMap<>(newer);
+    }
+
     @Override
     public boolean equals(Object o) {
         return o instanceof LwwMap<?, ?> m && entries.equals(m.entries);

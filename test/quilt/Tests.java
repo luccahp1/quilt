@@ -389,6 +389,112 @@ public final class Tests {
                     s -> s.toList());
         });
 
+        // --- deltas: ship what changed, not the whole state ---
+        check("every type's delta is complete, honest, lean and quiet", () -> {
+            Laws.delta("GCounter", gcounters(), GCounter.empty());
+            Laws.delta("PNCounter", pncounters(), PNCounter.empty());
+            Laws.delta("GSet", gsets(), GSet.empty());
+            Laws.delta("TwoPhaseSet", twoPhaseSets(), TwoPhaseSet.empty());
+            Laws.delta("LwwRegister", registers(), LwwRegister.empty());
+            Laws.delta("OrSet", orSets(), OrSet.empty());
+            Laws.delta("LwwMap", lwwMaps(), LwwMap.empty());
+            Laws.delta("Rga", sequences(), Rga.empty());
+        });
+
+        check("gcounter delta after one increment is one slot, however many replicas", () -> {
+            GCounter big = GCounter.empty();
+            for (int i = 0; i < 1000; i++) {
+                big = big.increment(ReplicaId.of("replica-" + i), i + 1);
+            }
+            GCounter next = big.increment(ALICE, 2);
+            GCounter d = next.delta(big);
+            assertEquals(1, d.slots().size(), "only alice's slot moved");
+            assertEquals(next, big.merge(d), "and that is enough to catch up");
+        });
+
+        check("orset delta after one add is one dot, and carries no tombstones", () -> {
+            OrSet<String> big = OrSet.empty();
+            for (int i = 0; i < 500; i++) {
+                big = big.add(ALICE, "item" + i).remove("item" + i);
+            }
+            OrSet<String> next = big.add(BOB, "milk");
+            OrSet<String> d = next.delta(big);
+            assertEquals(Set.of("milk"), d.elements(), "just the new element");
+            assertEquals(0, d.retiredDotCount(), "none of the 500 retired dots go back over the wire");
+            assertEquals(next, big.merge(d), "and the receiver lands on the sender's state");
+        });
+
+        check("rga delta after one keystroke is one node", () -> {
+            Rga<Character> doc = type(Rga.empty(), ALICE, "the quick brown fox jumps over the lazy dog");
+            Rga<Character> next = doc.insertAt(BOB, 4, 'Q');
+            Rga<Character> d = next.delta(doc);
+            assertEquals(1, d.size(), "one inserted element");
+            assertEquals(next.text(), doc.merge(d).text(), "it lands where bob typed it");
+        });
+
+        check("lwwregister sends nothing when its write would lose", () -> {
+            LwwRegister<String> newer = LwwRegister.of("new", 9, BOB);
+            LwwRegister<String> older = LwwRegister.of("old", 3, ALICE);
+            assertTrue(older.delta(newer).isEmpty(), "the receiver already has a later write");
+            assertEquals(older, older.delta(LwwRegister.empty()), "an empty receiver gets the write");
+        });
+
+        check("deltas can be batched, reordered and redelivered", () -> {
+            GCounter base = GCounter.empty().increment(ALICE, 4);
+            GCounter one = base.increment(BOB, 1);
+            GCounter two = one.increment(CAROL, 2);
+            GCounter d1 = one.delta(base);
+            GCounter d2 = two.delta(one);
+            GCounter batch = d2.merge(d1);
+            assertEquals(two, base.merge(batch), "one merged batch");
+            assertEquals(two, base.merge(d2).merge(d1).merge(d2), "out of order, d2 twice");
+        });
+
+        check("gcounter converges on deltas alone", () -> {
+            Random random = new Random(SEED);
+            Laws.deltaGossip(
+                    "GCounter",
+                    List.of(ALICE, BOB, CAROL),
+                    GCounter.empty(),
+                    (state, replica, step) -> state.increment(replica, 1 + random.nextInt(3)),
+                    random,
+                    300,
+                    s -> s.value());
+        });
+
+        check("orset converges on deltas alone", () -> {
+            Random random = new Random(SEED);
+            Laws.deltaGossip(
+                    "OrSet",
+                    List.of(ALICE, BOB, CAROL),
+                    OrSet.<String>empty(),
+                    (state, replica, step) -> {
+                        String item = "item" + random.nextInt(5);
+                        return random.nextInt(3) == 0 ? state.remove(item) : state.add(replica, item);
+                    },
+                    random,
+                    300,
+                    s -> s.elements());
+        });
+
+        check("rga converges on deltas alone", () -> {
+            Random random = new Random(SEED);
+            Laws.deltaGossip(
+                    "Rga",
+                    List.of(ALICE, BOB, CAROL),
+                    Rga.<Character>empty(),
+                    (state, replica, step) -> {
+                        if (state.size() > 2 && random.nextInt(4) == 0) {
+                            return state.removeAt(random.nextInt(state.size()));
+                        }
+                        char c = (char) ('a' + (step % 26));
+                        return state.insertAt(replica, random.nextInt(state.size() + 1), c);
+                    },
+                    random,
+                    300,
+                    s -> s.toList());
+        });
+
         report();
     }
 

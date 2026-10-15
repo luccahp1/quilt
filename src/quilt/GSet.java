@@ -73,6 +73,15 @@ public final class GSet<E> implements Crdt<GSet<E>> {
         return new GSet<>(next);
     }
 
+    /** The elements {@code since} has not seen. */
+    @Override
+    public GSet<E> delta(GSet<E> since) {
+        Objects.requireNonNull(since, "since");
+        Set<E> unseen = new LinkedHashSet<>(elements);
+        unseen.removeAll(since.elements);
+        return new GSet<>(unseen);
+    }
+
     @Override
     public boolean equals(Object o) {
         return o instanceof GSet<?> g && elements.equals(g.elements);

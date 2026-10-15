@@ -80,6 +80,12 @@ public final class TwoPhaseSet<E> implements Crdt<TwoPhaseSet<E>> {
     }
 
     @Override
+    public TwoPhaseSet<E> delta(TwoPhaseSet<E> since) {
+        Objects.requireNonNull(since, "since");
+        return new TwoPhaseSet<>(added.delta(since.added), removed.delta(since.removed));
+    }
+
+    @Override
     public boolean equals(Object o) {
         return o instanceof TwoPhaseSet<?> t && added.equals(t.added) && removed.equals(t.removed);
     }

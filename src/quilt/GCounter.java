@@ -79,6 +79,19 @@ public final class GCounter implements Crdt<GCounter> {
         return new GCounter(next);
     }
 
+    /** The slots that have moved past where {@code since} has them, at their current values. */
+    @Override
+    public GCounter delta(GCounter since) {
+        Objects.requireNonNull(since, "since");
+        Map<ReplicaId, Long> ahead = new TreeMap<>();
+        for (Map.Entry<ReplicaId, Long> e : counts.entrySet()) {
+            if (e.getValue() > since.valueOf(e.getKey())) {
+                ahead.put(e.getKey(), e.getValue());
+            }
+        }
+        return new GCounter(ahead);
+    }
+
     @Override
     public boolean equals(Object o) {
         return o instanceof GCounter g && counts.equals(g.counts);

@@ -35,7 +35,8 @@ All eight implement one interface:
 
 ```java
 public interface Crdt<S extends Crdt<S>> {
-    S merge(S other);
+    S merge(S other);    // the least upper bound of two states
+    S delta(S since);    // just the part of this state that `since` is missing
 }
 ```
 
@@ -160,6 +161,45 @@ dot's counter is at least as large as everything its author had seen. Then "grea
 implies "not causally earlier", which is the guarantee the sibling ordering actually needs. Equal
 counters mean genuine concurrency and break on replica id.
 
+## Shipping only what changed
+
+Merging whole states is correct and wasteful. A counter shared by a thousand replicas sends a
+thousand slots to report one increment, and a set that has churned for a year sends every retired
+dot it ever saw. Every type therefore also answers a second question: what does a peer that holds
+`since` not have yet?
+
+```java
+GCounter acked = counter;                    // the last state the peer acknowledged
+GCounter now = counter.increment(alice);
+
+GCounter d = now.delta(acked);               // one slot, not a thousand
+peer.merge(d).equals(peer.merge(now));       // true for any peer that holds `acked`
+```
+
+A delta is not a new kind of object. It is an ordinary state of the same type, built from just
+the pieces the receiver is missing: the counter slots that moved, the set elements it has not
+seen, the dots an `OrSet` add minted, the nodes a keystroke added to an `Rga`. So it merges with
+the same `merge`, and everything that makes merge safe carries over for free. Deltas can be
+batched by merging them together, arrive out of order, or arrive twice.
+
+```java
+GCounter batch = d2.merge(d1);               // two syncs' worth, sent as one
+base.merge(d2).merge(d1).merge(d2);          // reordered and duplicated: same result
+```
+
+This is the delta-state approach from Almeida, Shoker and Baquero, computed the way Enes et al.
+compute optimal deltas: decompose the state into its smallest independent pieces and keep the
+ones `since` does not already cover. Each type's version is a few lines because each type's state
+is already made of such pieces.
+
+The one obligation is on the sender. `since` must be something the receiver really holds, such as
+the last state it acknowledged. Underestimating is fine: the delta is just bigger than it needed
+to be. Guessing too high is not, because the delta then leaves out what the receiver was missing.
+When in doubt, `delta(empty())` is the whole state, which is always correct.
+
+A delta is for merging, not reading. An `Rga` delta usually holds a character without the
+character it was typed after, because the receiver already has that one.
+
 ## Testing
 
 ```bash
@@ -167,7 +207,7 @@ counters mean genuine concurrency and break on replica id.
 ```
 
 ```
-  49/49 passed
+  58/58 passed
 ```
 
 Two kinds of test. Example tests pin down behaviour worth documenting - add-wins really does win,
@@ -181,6 +221,11 @@ generated states, because convergence bugs hide in the orderings nobody thought 
   since a real network merges partial results into partial results
 - **`gossip`** - a simulated cluster where replicas apply local operations and sync with random
   peers, so edits routinely land on states that are missing edits they will learn about later
+- **`delta`** - over every pair of states, a delta is *complete* (the receiver lands where the
+  whole state would have taken it), *honest* (nothing the sender does not have), *lean* (nothing
+  the receiver already has) and *quiet* (an up-to-date receiver is sent the empty state)
+- **`deltaGossip`** - the gossip cluster again, syncing on deltas alone, each computed against a
+  stale record of what that peer was last sent. It still has to converge
 
 Every randomised test is seeded. A failure reproduces exactly, which is the difference between a
 useful randomised test and a flaky one.
@@ -188,7 +233,7 @@ useful randomised test and a flaky one.
 ### The tests were checked against deliberate bugs
 
 A suite that passes proves nothing on its own. Eleven realistic bugs were introduced one at a time
-and the suite had to go red for each:
+and the suite (49 tests at the time) had to go red for each:
 
 | Mutation | Result |
 |---|---|
@@ -208,12 +253,30 @@ All eleven were caught. The narrowest margin was one test, for the mutation wher
 retires dots it has not observed - which is precisely the add-wins property, and precisely the
 thing an example-based test would be least likely to cover.
 
+The same was done for deltas, against the 58-test suite: eight more bugs, one per type.
+
+| Mutation | Result |
+|---|---|
+| `GCounter` delta ships slots the receiver already matches | killed, 56/58 |
+| `PNCounter` delta sends decrements as increments | killed, 57/58 |
+| `GSet` delta ships the whole set | killed, 57/58 |
+| `TwoPhaseSet` delta drops the removals | killed, 57/58 |
+| `LwwRegister` delta resends an equal write | killed, 57/58 |
+| `OrSet` delta forgets retired dots | killed, 56/58 |
+| `LwwMap` delta sends every key | killed, 57/58 |
+| `Rga` delta ignores tombstones | killed, 56/58 |
+
+All eight were caught by the `delta` law itself, not only by an example, which is the point of
+checking a property over every pair instead of a few hand-picked cases. The redundant ones
+(shipping what the receiver has, resending an equal write) are bugs that never break convergence,
+so no convergence test could catch them; only the *lean* and *quiet* properties do.
+
 ## What this does not do
 
 - **No garbage collection.** Tombstones and retired dots accumulate forever. Every type that keeps
   them exposes a count so the growth is at least visible.
-- **No delta sync.** Merging ships whole states. Delta-state CRDTs send only what changed and are
-  what you want over a real link.
+- **Deltas, but no protocol.** `delta(since)` works out what a peer is missing. Remembering what
+  each peer has acknowledged, and resending when a message is lost, is the transport's job.
 - **No serialisation.** No JSON, no protobuf, no opinion about your wire format.
 - **No thread safety needed, and none provided.** Instances are immutable, so sharing one is safe;
   a mutable reference to "the current state" is yours to guard.

@@ -82,6 +82,16 @@ public final class LwwRegister<V> implements Crdt<LwwRegister<V>> {
         return compareWrites(other) >= 0 ? this : other;
     }
 
+    /**
+     * This write, if it would beat what {@code since} holds, and the empty register otherwise. A
+     * register is one indivisible slot, so the only choices are all of it or nothing.
+     */
+    @Override
+    public LwwRegister<V> delta(LwwRegister<V> since) {
+        Objects.requireNonNull(since, "since");
+        return compareWrites(since) > 0 ? this : empty();
+    }
+
     /** Positive when this write beats {@code other}'s, negative when it loses, zero when equal. */
     private int compareWrites(LwwRegister<V> other) {
         if (writer == null && other.writer == null) {

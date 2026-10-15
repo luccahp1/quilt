@@ -136,6 +136,29 @@ public final class OrSet<E> implements Crdt<OrSet<E>> {
         return new OrSet<>(nextAdds, nextRetired);
     }
 
+    /**
+     * The add dots and retired dots that {@code since} has not seen.
+     *
+     * <p>Dots are what make this precise. A delta after one add carries one dot, however large the
+     * set is, and a delta after a remove carries only the dots that remove retired.
+     */
+    @Override
+    public OrSet<E> delta(OrSet<E> since) {
+        Objects.requireNonNull(since, "since");
+
+        Map<E, Set<Dot>> unseenAdds = new LinkedHashMap<>();
+        for (Map.Entry<E, Set<Dot>> entry : adds.entrySet()) {
+            Set<Dot> unseen = new TreeSet<>(entry.getValue());
+            unseen.removeAll(since.adds.getOrDefault(entry.getKey(), Set.of()));
+            if (!unseen.isEmpty()) {
+                unseenAdds.put(entry.getKey(), unseen);
+            }
+        }
+        Set<Dot> unseenRetired = new TreeSet<>(retired);
+        unseenRetired.removeAll(since.retired);
+        return new OrSet<>(unseenAdds, unseenRetired);
+    }
+
     private Map<E, Set<Dot>> copyAdds() {
         Map<E, Set<Dot>> copy = new LinkedHashMap<>();
         for (Map.Entry<E, Set<Dot>> entry : adds.entrySet()) {
