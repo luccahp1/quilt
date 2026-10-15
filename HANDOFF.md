@@ -1,14 +1,22 @@
 # Handoff - quilt
 
-_Last updated: 2026-08-06_
+_Last updated: 2026-10-15_
 
 Current state and the reasoning that is not obvious from the code. For what the
 library is and how to use it, see [README.md](README.md).
 
 ## State
 
-**Complete and green.** Eight CRDTs, 49 tests, zero dependencies, zero compiler
+**Complete and green.** Eight CRDTs, 58 tests, zero dependencies, zero compiler
 warnings at `-Xlint:all`. CI runs JDK 17, 21 and 24 on every push.
+
+**Delta sync (2026-10-15).** `Crdt.delta(since)` on all eight types returns only
+what a peer holding `since` is missing, as an ordinary state of the same type.
+`Laws.delta` checks every pair for complete / honest / lean / quiet, and
+`Laws.deltaGossip` checks a cluster converges on deltas alone. Eight delta
+mutations, one per type, were all killed (README table). The quiet and lean
+checks are the only ones that can catch a redundant delta, since shipping too
+much never breaks convergence.
 
 ```powershell
 .\build.ps1        # or ./build.sh
